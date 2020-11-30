@@ -4,7 +4,6 @@ import threading
 import user
 import os
 import signal
-import tqdm
 
 HOST = "127.0.0.1"
 PORT = 1234
@@ -12,6 +11,11 @@ BUFFER_SIZE = 1024 * 4
 clients = []  # list of clients
 rooms = ['general']
 SEPARATOR = "<SEPARATOR>"
+
+def help():
+    print("\nHere is a list of commands:")
+    print("\n#disconnect <client> (to disconnect a connect client.)")
+    print("\nType quit to disconnect from IRC session.\n")
 
 
 # this method sends the data/msg to all clients except the sending user
@@ -102,6 +106,10 @@ def analyze(msg, new_user):
         list_all_rooms(new_user)
         value = 1
 
+    elif data[0][0] == "#myrooms":
+        list_my_rooms(new_user)
+        value = 1
+
     elif data[0][0] == "#pm":
         if len(data[0]) == 3:
             other_user = data[0][1]
@@ -115,16 +123,6 @@ def analyze(msg, new_user):
             new_user.socket.send("Should only have one client listed, too many listed refer to the #help.".encode("utf-8"))
             value = 1
 
-    elif data[0][0] == "#ftp":
-        if len(data[0]) == 3 or len(data[0]) == 4:
-            file_name = data[0][1]
-            receiving_user = data[0][2]
-            file_transfer(new_user, receiving_user, file_name, data)
-            value = 1
-        else:
-            new_user.socket.send("Invalid parameters. Please try again.".encode("utf-8"))
-            value = 1
-
     elif data[0][0] == "#listroom":
         if len(data[0]) == 2:
             room_name = data[0][1]
@@ -133,6 +131,16 @@ def analyze(msg, new_user):
         else:
             new_user.socket.send("Invalid parameters. Please try again.".encode("utf-8"))
 
+    """ elif data[0][0] == "#ftp":
+        if len(data[0]) == 3 or len(data[0]) == 4:
+            file_name = data[0][1]
+            receiving_user = data[0][2]
+            file_transfer(new_user, receiving_user, file_name, data, msg)
+            value = 1
+        else:
+            new_user.socket.send("Invalid parameters. Please try again.".encode("utf-8"))
+            value = 1 """
+
     return value
 
 
@@ -140,19 +148,35 @@ def join_room(room_name, _user):
     if len(rooms) >= 10:
         _user.socket.sendall("sorry room limit reached for the server")
     else:
-        if room_name not in rooms:
-            msg = "room does not exist".encode("utf-8")
-            _user.socket.send(msg)
 
         if len(str.split(room_name, ' ')) > 1 or len(room_name) == 0:
             _user.socket.sendall("Invalid room name.".encode("utf-8"))
 
-            # add to _users room list
-        if room_name not in _user.room:
-            _user.room.append(room_name)
+        if ',' in room_name:
+            temp_rooms = room_name.split(',')
+            for room_n in temp_rooms:
+                if room_n not in rooms:
+                    msg = "room does not exist".encode("utf-8")
+                    _user.socket.send(msg)
+                else:
+                    if room_n not in _user.room:
+                        _user.room.append(room_n)
+                        msg = ("You have joined room: " + room_n + "\n")
+                        _user.socket.sendall(msg.encode("utf-8"))
+                        join_msg = (_user.name + " has joined %s" % room_n + "\n").encode("utf-8")
+                        roomcast(join_msg, _user, room_n)
 
-        join_msg = (_user.name + " has joined %s" % room_name).encode("utf-8")
-        roomcast(join_msg, _user, room_name)
+        else:
+            if room_name not in rooms:
+                msg = ("Room(" + room_name + ") does not exist").encode("utf-8")
+                _user.socket.send(msg)
+            else:
+                if room_name not in _user.room:
+                    _user.room.append(room_name)
+                    msg = ("You have joined room: " + room_name + "\n")
+                    _user.socket.sendall(msg.encode("utf-8"))
+                    join_msg = (_user.name + " has joined %s" % room_name + "\n").encode("utf-8")
+                    roomcast(join_msg, _user, room_name)
 
 
 def create_room(room_name, _user):
@@ -161,10 +185,31 @@ def create_room(room_name, _user):
     else:
         if len(str.split(room_name, ' ')) > 1 or len(room_name) == 0:
             _user.socket.sendall("Invalid room name.".encode("utf-8"))
-        if room_name not in rooms:
-            msg = f"User: [{_user.name}] created new room: {room_name}".encode("utf-8")
+        if ',' in room_name:
+            temp_rooms = room_name.split(',')
+            for room_n in temp_rooms:
+                if room_n not in rooms:
+                    msg = f"User: [{_user.name}] created new room: {room_n}\n".encode("utf-8")
+                    broadcast(msg, _user, 'all-users')
+                    rooms.append(room_n)
+                else:
+                    _user.socket.sendall(("Room(" + room_n + ") already exists").encode("utf-8"))
+
+                # add to _users room list
+                if room_n not in _user.room:
+                    _user.room.append(room_n)
+        else:
+            msg = f"User: [{_user.name}] created new room: {room_name}\n".encode("utf-8")
             broadcast(msg, _user, 'all-users')
             rooms.append(room_name)
+
+            # add to _users room list
+            if room_name not in rooms:
+                msg = f"User: [{_user.name}] created new room: {room_name}\n".encode("utf-8")
+                broadcast(msg, _user, 'all-users')
+                rooms.append(room_name)
+            else:
+                _user.socket.sendall(("Room(" + room_name + ") already exists").encode("utf-8"))
 
             # add to _users room list
             if room_name not in _user.room:
@@ -172,43 +217,76 @@ def create_room(room_name, _user):
 
 
 def leave_room(room_name, _user):
-    if room_name not in rooms:
-        _user.socket.sendall("Room does not exist")
+    if len(str.split(room_name, ' ')) > 1 or len(room_name) == 0:
+        _user.socket.sendall("Invalid room name.".encode("utf-8"))
     else:
-        if room_name not in _user.room:
-            _user.socket.sendall("Can't leave a room your not in")
-        else:
-            _user.room.remove(room_name)
-            msg = f"{_user.name} has left the room".encode("utf-8")
-            roomcast(msg, _user, room_name)
+        if ',' in room_name:
+            temp_rooms = room_name.split(',')
+            for room_n in temp_rooms:
+                if room_n in _user.room:
+                    _user.room.remove(room_n)
+                    msg = ("You have left room: " + room_n + "\n")
+                    _user.socket.sendall(msg.encode("utf-8"))
+                    join_msg = (_user.name + " has left %s" % room_n + "\n").encode("utf-8")
+                    roomcast(join_msg, _user, room_n)
+                if room_n not in rooms:
+                    msg = "room does not exist".encode("utf-8")
+                    _user.socket.send(msg)
 
-            _user.socket.sendall(("You have been removed from the room: %s" % room_name).encode("utf-8"))
+        else:
+            if room_name not in rooms:
+                msg = "room does not exist".encode("utf-8")
+                _user.socket.send(msg)
+
+            if room_name not in _user.room:
+                _user.socket.sendall("Cant leave a room you are not in".encode("utf-8"))
+            else:
+                _user.room.remove(room_name)
+                msg = ("You have left room: " + room_name + "\n")
+                _user.socket.sendall(msg.encode("utf-8"))
+                join_msg = (_user.name + " has left %s" % room_name + "\n").encode("utf-8")
+                roomcast(join_msg, _user, room_name)
 
 
 def message_room(room_name, _user, data):
-    if room_name not in rooms:
-        _user.socket.sendall("Room does not exist")
+    if len(str.split(room_name, ' ')) > 1 or len(room_name) == 0:
+        _user.socket.sendall("Invalid room name.".encode("utf-8"))
     else:
-        if room_name not in _user.room:
-            _user.socket.sendall("Can't message a room you are not in")
+        if ',' in room_name:
+            temp_rooms = room_name.split(',')
+            for room_n in temp_rooms:
+                if room_n in _user.room:
+                    msg = ("[" + _user.name + "] " + "Room(" + room_n + "): " + data).encode("utf-8")
+                    roomcast(msg, _user, room_n)
+                else:
+                    msg = "You have not joined this room".encode("utf-8")
+                    _user.socket.send(msg)
+                if room_n not in rooms:
+                    msg = "room does not exist".encode("utf-8")
+                    _user.socket.send(msg)
+
         else:
-            msg = ("[" + _user.name + "]: " + data).encode("utf-8")
+            if room_name not in rooms:
+                msg = "room does not exist".encode("utf-8")
+                _user.socket.send(msg)
+
+            msg = ("[" + _user.name + "] " + "Room(" + room_name + "): " + data).encode("utf-8")
             roomcast(msg, _user, room_name)
 
 
 def list_all_rooms(_user):
     if len(rooms) > 0:
-        title_msg = ("=============  All Rooms  =============").encode("utf-8")
+        title_msg = "=============  All Rooms  =============".encode("utf-8")
         _user.socket.sendall(title_msg)
         for room in rooms:
-            msg = ("Room: " + room).encode("utf-8")
+            msg = ("Room: " + room + "\n").encode("utf-8")
             _user.socket.sendall(msg)
 
 
 def list_room_members(_user, room_name):
     if len(rooms) > 0:
         if room_name in rooms:
-                title_msg = ("=============  Room Members  =============").encode("utf-8")
+                title_msg = "=============  Room Members  =============".encode("utf-8")
                 _user.socket.sendall(title_msg)
                 for client in clients:
                     for room in client.room:
@@ -219,6 +297,18 @@ def list_room_members(_user, room_name):
             _user.socket.sendall("Room does not exist".encode("utf-8"))
     else:
         _user.socket.sendall("There are no rooms".encode("utf-8"))
+
+
+def list_my_rooms(_user):
+    if len(_user.room) > 0:
+        title_msg = "=============  Your Rooms  =============".encode("utf-8")
+        _user.socket.sendall(title_msg)
+        for room in _user.room:
+            msg = ("Room: " + room + "\n").encode("utf-8")
+            _user.socket.sendall(msg)
+    else:
+        _user.socket.sendall("You are not joined to any rooms".encode("utf-8"))
+
 
 
 def private_message(_user, ouser, msg):
@@ -232,9 +322,12 @@ def private_message(_user, ouser, msg):
         _user.socket.sendall("Sorry user does not exist. Cannot send message".encode("utf-8"))
 
 
-def file_transfer(_user, ouser, filename, data):
+def file_transfer(_user, ouser, filename, data, msg):
     if not (len(data[0]) == 4 and len(data[0][0]) > 0 and len(data[0][1]) > 0 and len(data[0][2]) > 0 and len(data[0][3]) > 0):
         _user.socket.sendall('Invalid parameter, see HELP.'.encode("utf-8"))
+        return 0
+
+    temp_data = msg
 
     filename = data[0][1]
     file_size = data[0][3]
@@ -244,7 +337,7 @@ def file_transfer(_user, ouser, filename, data):
             receiver = client
 
             # let sender send the file here
-            _user.socket.sendall('OK'.encode('utf-8'))
+            _user.socket.sendall(('100 ' + _user.name + ' ' + temp_data + ' ').encode('utf-8'))
 
             # receive file from sender
             try:
@@ -253,10 +346,12 @@ def file_transfer(_user, ouser, filename, data):
                     file_byte += _user.socket.recv(BUFFER_SIZE)
             except:
                 _user.socket.sendall('Failed to send file.'.encode("utf-8"))
+                return 0
 
             # send msg to receiver for preparation
+            data = '102 '
             receiver_filename = 'receive_' + os.path.basename(filename)
-            data = f'{receiver_filename} {file_size} \nClient "[{_user.name}]" send you a file "{receiver_filename}"'
+            data += f'{receiver_filename} {file_size} \nClient "[{_user.name}]" send you a file "{receiver_filename}"'
             receiver.socket.sendall(data.encode('utf-8'))
 
             # receive receiver's response
@@ -264,6 +359,7 @@ def file_transfer(_user, ouser, filename, data):
                 receiver_response = receiver.socket.recv(BUFFER_SIZE)
             except:
                 _user.socket.sendall('Failed to send file.'.encode("utf-8"))
+                return 0
 
             # if receiver ready to receive the file
             if receiver_response.decode('utf-8') == 'OK':
@@ -271,10 +367,15 @@ def file_transfer(_user, ouser, filename, data):
                 receiver.socket.sendall(file_byte)
             else:
                 _user.socket.sendall('Failed to send file.'.encode("utf-8"))
+                return 0
 
             # send msg to current user
             data = f'You sent a file "{filename}" to user "{receiver.name}"'
             _user.socket.send(data.encode('utf-8'))
+            return 1
+    _user.socket.sendall(f"User {ouser} doesn't exist".encode("utf-8"))
+    return 0
+
 
 
 
@@ -349,6 +450,8 @@ def threaded(new_user):
 
                     broadcast(data, new_user, 'all-users')
 
+                    print("Client: " + new_user.name + " has disconnected")
+
                     break
         for i in clients:
             if i.name == new_user.name:
@@ -358,8 +461,12 @@ def threaded(new_user):
 
                 broadcast(data, new_user, 'all-users')
 
+                print("Client: " + new_user.name + " has disconnected")
+
                 break
-        os.kill(os.getpid(), signal.SIGTERM)  # kill the process and running threads
+        new_user.socket.close()
+        if new_user in clients:
+            clients.remove(new_user)
 
 
 def main():
@@ -379,6 +486,7 @@ def main():
         sys.exit()
 
     l = threading.Thread(target=listener, args=(server_socket,))  # start thread
+    l.daemon = True
     l.start()
 
 
@@ -388,6 +496,17 @@ def main():
         if msg == 'quit':
             os.kill(os.getpid(), signal.SIGTERM)  # kill the process and running threads
             sys.exit()
+
+        if len(data) == 2:
+            if data[0] == '#disconnect':
+                d_user = data[1]
+                for client in clients:
+                    if client.name == d_user:
+                        client.socket.close()
+                        clients.remove(client)
+
+        if msg == 'help':
+            help()
 
 
 if __name__ == '__main__':

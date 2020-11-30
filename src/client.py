@@ -1,16 +1,12 @@
 import socket
-import select
-import errno
-import sys
-from _thread import *
 import signal
 import threading
 import os
-import tqdm
 
 BUFFER_SIZE = 1024 * 4
 HOST = "127.0.0.1"
 PORT = 1234
+u_file = ""
 
 def help():
     print("\nHere is a list of commands:")
@@ -28,17 +24,24 @@ def help():
     print("Example: #listroom funroom")
     print("Example: #userlist general")
     print("Example: #leave funroom")
+    print("Example: quit")
     print("\nYou can also simply type in a message and everyone in your current room/rooms will see your message!\n")
 
 
-def listener(s):
+def listener(s, u_name):
     while True:
         try:
             idata = s.recv(BUFFER_SIZE)  # receive,interpret and print the data from the host
             if not idata:
                 break
 
-            print(idata.decode("utf-8"))
+            if idata:
+                idata = idata.decode("utf-8")
+                data = idata.split(' ')
+                if data[1] == '#ftp' and data[5] == 'OK' and data[0] == u_name:
+                    s.send(u_file.encode("utf-8"))
+                else:
+                    print(idata)
 
         except socket.error:  # host connection lost
             print("Host connection lost!")
@@ -55,10 +58,10 @@ def analyze(msg, server_sock):
 
     data.append(msg.split())
 
-    if data[0][0] == "#ftp":
+    """ if data[0][0] == "#ftp":
         file_name = data[0][1]
         file_transfer(server_sock, file_name, msg)
-        value = 1
+        value = 1 """
 
     return value
 
@@ -78,21 +81,11 @@ def file_transfer(server_sock, filename, msg):
         print('\nError: File doesn\'t exist.\n')
         return 0
 
+    u_file = file_byte
+
     file_size = len(file_byte)
     msg += ' ' + str(file_size)
     server_sock.send(msg.encode('utf-8'))  # send msg
-
-    # receive server response
-    try:
-        server_response = server_sock.recv(BUFFER_SIZE).decode('utf-8')
-    except:
-        print('\nError: Failed to send file. server no response\n')
-        return 0
-
-    # if server ready to receive the file
-    if server_response == 'OK':
-        # send file
-        server_sock.send(file_byte)
 
 
 def main():
@@ -112,11 +105,12 @@ def main():
             os.kill(os.getpid(), signal.SIGTERM)
 
     username = input("Username: ")
+    u_name = username
 
     # send username to server
     s.sendall(username.encode("utf-8"))
 
-    i_thread = threading.Thread(target=listener, args=(s,))
+    i_thread = threading.Thread(target=listener, args=(s, username))
     i_thread.start()
 
     print("\n\nWelcome to the IRC\n")
@@ -141,7 +135,7 @@ def main():
                 print("Host connection lost!")
                 break
 
-    # os.kill(os.getpid(), signal.SIGTERM)
+    s.close()
 
 
 if __name__ == '__main__':
